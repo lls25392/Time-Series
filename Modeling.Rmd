@@ -1,0 +1,102 @@
+---
+title: "Research Project"
+author: "Lebo Sango"
+date: "2024-03-20"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(fpp3)
+install.packages("readxl")
+library(readxl)
+```
+
+## R 
+
+```{r }
+
+file.choose()
+
+tky =  read_excel("/Users/lebsan/Library/Mobile Documents/com~apple~CloudDocs/Saint Louis University/STAT 4840 - Time Series/Dataset/Turkeydata.xlsx")
+tky2 = tky %>% mutate(date = as.Date(Date)) %>% select(-Date)
+tky3 = tky2 %>% mutate(Year = year(date)) %>% mutate(Quarter = quarter(date))
+tky3
+tky4 = tky3 %>% mutate(Quarter = make_yearquarter(Year,Quarter))
+tky4
+tky5 = tky4 %>%  select(-date, -Year) %>% as_tsibble(index= Quarter)
+tky5
+```
+
+## Plot
+
+```{r }
+
+tky5 %>% autoplot(USDTRY)
+tky5 %>% autoplot(`EXP_%`, col = "blue")+ geom_line(aes(y = `IM_%`), color = "orange")
+
+tky5 %>% autoplot(IR, col = "green")+ geom_line(aes(y = CPI), color = "grey")+theme_linedraw()
+
+```
+
+## Correlation
+
+```{r echo=FALSE, message=TRUE, warning=TRUE}
+
+tky5 %>% pairs()
+tky %>% select(-Date) %>% GGally::ggpairs()
+
+
+```
+
+
+## Modeling
+
+## Linear Model
+
+```{r pressure, echo=FALSE}
+model1 = tky5 %>%  model(TSLM(USDTRY ~ IR + CPI + `EXP_%`+ `IM_%` + trend()  ))
+model1 %>% report()
+```
+
+
+
+
+#### Residuals analysis
+
+```{r }
+
+model1 %>% gg_tsresiduals()
+lmodel_resid =  model1 %>% augment() %>% pull(.resid)
+## creating lag variables 
+lag_1 = lmodel_resid %>% lag(n=1)
+lag_2 = lmodel_resid %>% lag(n=2)
+```
+
+
+#### Adjusted Model for serial correlation
+
+```{r }
+
+model2 = tky5 %>%  model(TSLM(USDTRY ~ IR + CPI + `EXP_%`+ `IM_%` + trend() + lag_1 ))
+model2 %>% report()
+
+
+```
+## Forecast
+
+```{r }
+
+
+tky5 %>%  model(TSLM(USDTRY ~ IR + CPI + `EXP_%`+ `IM_%` + trend() + lag_1 )) %>% forecast(h="2 years")
+```
+
+### NAIVE model
+
+```{r }
+
+```
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
