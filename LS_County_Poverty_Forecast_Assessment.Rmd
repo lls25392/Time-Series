@@ -1,0 +1,218 @@
+---
+title: "Maryland Poverty Level - Data Cleaning"
+author: "Lebo Sango"
+date: "2024-04-16"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("GGally")
+#install.packages("mapproj")
+#install.packages("maps")
+#install.packages("readxl")
+
+
+library(fpp3)
+library(maps)
+library(usmap)
+library(usmapdata)
+library(mapproj)
+library(ggplot2)
+library(lubridate)
+library(readxl)
+library("GGally")
+
+```
+
+## 1.1 SAIPE
+
+```{r SAIPE, warning=FALSE}
+
+MD_raw = read.csv("/Users/lebsan/Documents/STAT 5084 - Time Series/County Level Project/Gathering Dataset/SAIPE Masterfile.csv")
+
+# Data Transformation
+
+MD_transf = MD_raw %>% rename(county_pov = Poverty.Universe, FIPS = ID, 
+                              poverty_pop = Number.in.Poverty) %>% 
+  select(Year, FIPS, county_pov,poverty_pop, Name) %>%
+  mutate(poverty_pop = as.numeric(stringr::str_remove_all(poverty_pop,",")))%>% 
+  mutate(county_pov = as.numeric(stringr::str_remove_all(county_pov,",")))%>% 
+  as_tsibble(index = Year, key = c(FIPS, Name)) %>% 
+  na.omit() %>%
+  filter( FIPS != 0)%>% 
+  filter( FIPS != 24000 )# removed the zero values that correspond to the United
+  #States in FIPS 
+
+
+# ----------------- This code is for part I
+
+MD_SAIPE = MD_transf%>% select(FIPS, year = Year,Name ,poverty_pop,county_pov) %>%
+ filter(FIPS %in% c(24031,24033,24005,24003,24510,24027,24021, 24025, 24013))
+
+#--------------------------
+
+# The state of Maryland counts 24 counties
+MD_transf %>% count(n_distinct(FIPS))
+
+# The largest county by population is the 24031 or Montgomery County
+MD_transf %>% arrange(desc(county_pov)) %>% 
+  head()
+
+# The 9 largest county by population 
+
+MD_transf %>% group_by(FIPS, Name) %>%
+  summarise(Largest_counties_by_pop = max(county_pov)) %>% 
+  arrange(desc(Largest_counties_by_pop)) %>% filter(Year==2022) %>%
+  head(9)
+
+
+
+```
+
+# Map of counties of the state of Maryland
+
+```{r pressure, echo=FALSE}
+
+# Plot the map using ggplot2
+
+plot_usmap(data = countypop, values = "pop_2022", include = "MD",
+           labels = TRUE )+
+  scale_fill_continuous(
+    low = "white", high = "blue", name = "Population (2022)",
+    label = scales::comma
+  ) 
+
+
+
+```
+
+# Time plot showing the level of poverty in the 9 largest counties
+
+```{r}
+
+MD_transf %>% select(FIPS,Year,Name ,poverty_pop) %>% 
+  filter(FIPS %in% c(24031,24033,24005,24003,24510,24027,24021, 24025, 24013))  %>% 
+  ggplot(aes(x= Year, y=poverty_pop, group = FIPS, color=Name))+
+  geom_line()+ 
+  labs(x= "Year", y= " SAIPE per County Population", 
+       title = " Census of Maryland Counties' Small Area Income and Poverty, SAIPE
+       ")+
+  theme_light() 
+
+
+
+```
+
+# 1.2 County SNAP Benefits
+
+```{r}
+
+
+MD_snap = read.csv("/Users/lebsan/Documents/STAT 5084 - Time Series/County Level Project/Gathering Dataset/cntysnap (1).csv", colClasses = "character" )
+
+# gsub removes the "X" next to year & # pivot longer aids to transpose year and 
+#values to columns
+
+snap_MD = as_tibble(MD_snap) %>% 
+  pivot_longer(cols= X2021:X1989, 
+                names_to = "year", 
+                values_to ="SnapBenefits",
+                values_drop_na = TRUE) %>% 
+  mutate(year = gsub("X","",year))
+
+
+# Converting year to date and merging state & county FIPS
+# grepl allows to filter specifically by the string ending with
+
+snap_MD1 = snap_MD %>% mutate(year = as.numeric(year)) %>% 
+  filter(grepl(", MD", Name)) %>% 
+  mutate(FIPS = paste(State.FIPS.code,County.FIPS.code ,sep = ""))%>%  
+  as_tsibble(index = year, key = c(Name, FIPS) )            
+
+
+# Time plot of the nine largest counties receiving SNAP benefits and converting
+#Snap benefits to numeric
+
+
+
+#------------------------------
+snap_MD2 = snap_MD1 %>% select(c(FIPS,year, Name, SnapBenefits)) %>%
+  filter(Name %in% c("Montgomery County, MD", "Prince George's County, MD"
+                   , "Baltimore County, MD", "Anne Arundel County, MD",
+                   "Baltimore city, MD", "Howard County, MD",
+                   "Frederick County, MD", "Harford County, MD", 
+                   "Carroll County, MD" ) ) %>%
+  mutate(SnapBenefits = as.numeric(gsub("[\\,]","", SnapBenefits))) 
+
+snap_MD2 %>% head()
+
+
+# Plot of the nine Largest counties receiving SNAP
+
+snap_MD2 %>% ggplot(aes(x=year, y=SnapBenefits, color = Name))+
+  geom_line() + labs(title = " County Populaion Receiving SNAP Assistance",
+                     y="SNAP per pop")+theme_linedraw()
+```
+
+#1.3 State IRS Data
+
+```{r}
+
+MD_tax_exempt = read_xls("/Users/lebsan/Documents/STAT 5084 - Time Series/County Level Project/Gathering Dataset/irs.xls", skip = 1)
+
+MD_tax_exempt1 = MD_tax_exempt %>% 
+  select(FIPS= `State FIPS code`,Year ,Name,
+         Pop_poor_exempt = `Poor exemptions`) %>% 
+   as_tsibble(index = Year, key= c(FIPS, Name)) %>% 
+   filter(FIPS == 24) %>% rename(year = Year)
+
+MD_tax_exempt1%>% head() 
+
+
+# Plot of the Number of poor exemptions filed in Maryland
+
+MD_tax_exempt1 %>% ggplot(aes(x=year, y=Pop_poor_exempt))+
+  geom_line()+ 
+  labs(title = "Number of Maryland Population Tax-exempted")+
+  scale_y_log10()
+ 
+```
+
+# 1.4 Merging Data
+
+```{r warning=FALSE}
+
+md_merge = merge(MD_SAIPE, snap_MD2, by = c("FIPS","year"))
+
+final_md = merge(md_merge, MD_tax_exempt1, by = c("year")) %>% 
+  select(c(year,FIPS=FIPS.x, County = Name.x,State = Name, 
+           SAIPE = poverty_pop, SNAP = SnapBenefits, 
+           IRS_exempt_State = Pop_poor_exempt,Poverty_Universe = county_pov))
+
+final_md %>% head()
+
+
+
+#  Data Visualization exhibiting the relationshp between SAIPE, SNAP, IRS tax-exempt
+# and poverty universe.
+final_md %>% mutate(SAIPE = log(SAIPE), SNAP = log(SNAP),
+                    IRS_exempt_State = log(IRS_exempt_State), 
+                    Poverty_Universe = log(Poverty_Universe)) %>% 
+  select(c(SAIPE,SNAP, IRS_exempt_State,
+           Poverty_Universe))%>% ggpairs()
+
+
+
+
+
+```
+
+
+SAIPE and SNAP shows a high correlation coefficient and poverty universe displays a high correlation coefficient as well of  0.9. However, IRS tax-exempt has the weakest relationship with poverty universe as compared to SNAP and SAIPE. The log-transformation allows to get rid of variations in the data and capture outliers. SAIPE relationships with  SNAP and Poverty_universe exhibit sensitivity to large numbers.
+

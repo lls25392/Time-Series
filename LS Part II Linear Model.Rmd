@@ -1,0 +1,431 @@
+---
+title: "Part II III IV -  Maryland Poverty Level"
+author: "Lebo Sango"
+date: "2024-04-24"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(fpp3)
+library(maps)
+library(usmap)
+library(usmapdata)
+library(mapproj)
+
+```
+
+## Data Cleaning
+
+```{r cars}
+
+maryland_raw = read.csv("/Users/lebsan/Documents/STAT 5084 - Time Series/County Level Project/Universe_Maryland_poverty.csv",sep = ",") %>% as_tibble()
+
+maryland =maryland_raw %>% 
+  mutate( SAIPE = as.numeric(SAIPE),SNAP = as.numeric(SNAP), 
+          IRS_exempt_State = as.numeric(IRS_exempt_State),
+          Poverty_Universe = as.numeric(Poverty_Universe)) %>% 
+  select(c(year,County, SAIPE, SNAP, IRS_exempt_State, Poverty_Universe)) %>% 
+  as_tsibble(index =year, key = County )
+
+maryland %>% head(5)
+
+```
+
+## Linear models
+
+
+```{r pressure, echo=FALSE, warning=FALSE}
+
+maryland_models = maryland %>% 
+  model(SAIPE_c_SNAP_IRS_PovUniverse = TSLM(log(SAIPE) ~ log(SNAP) + log(IRS_exempt_State) + log(Poverty_Universe)),
+        SAIPE_c_SNAP_IRS = TSLM(log(SAIPE) ~ log(SNAP) + log(IRS_exempt_State)),
+        SAIPE_c_SNAP = TSLM(log(SAIPE) ~ log(SNAP)),
+        SAIPE_c_IRS_PovUniverse = TSLM(log(SAIPE) ~ log(IRS_exempt_State) + log(Poverty_Universe)),
+        SAIPE_c_IRS = TSLM(log(SAIPE) ~ log(IRS_exempt_State)),
+        SAIPE_c_SNAP_PovUniverse = TSLM(log(SAIPE) ~ log(SNAP) + log(Poverty_Universe)), 
+        SAIPE_c__PovUniverse = TSLM(log(SAIPE) ~ log(Poverty_Universe))) %>% report()
+
+
+# Linear models precision test
+maryland_models %>% group_by(Linear_models = .model) %>%
+  summarise(AIC = sum(AIC), CV = sum(CV), BIC = sum(BIC)) %>% 
+  arrange(desc(BIC))
+
+
+```
+Lower cross validation and BIC  model 6 (SAIPE = B0 + B1SNAP + B2PovUniverse) is the best model. SNAP and Poverty Universe displayed a strong correlation coefficient with SAIPE. In addition, model 1 including all the dependent variable had very close precision crieteria compared to model6. I decided to proceed with model 6 because two of the precision criteria were the smallest. This distinction can be caused by the low correlation coeffient of 0.118  betwen SAIPE and IRS_exempt_State which hinder the model.
+
+
+```{r }
+
+# Plot of the fitted predictions of the nine biggest counties with the best linear model.
+maryland %>% 
+  filter(County %in% c("Montgomery County", "Prince George's County"
+                   , "Baltimore County", "Anne Arundel County",
+                   "Baltimore city", "Howard County",
+                   "Frederick County", "Harford County", 
+                   "Carroll County" ) ) %>% 
+  model(linear_model = TSLM(log(SAIPE) ~ log(SNAP) + log(Poverty_Universe))) %>% 
+  augment() %>% ggplot(aes(x=year))+
+  geom_line(aes(y=SAIPE)) +
+  geom_line(aes(y=.fitted, color=.model)) +
+  facet_wrap(.~County, scales = "free_y")+
+  labs(title = " Maryland 9 Largest Counties - 
+       Linear model : TSLM(log(SAIPE) ~ log(SNAP) + log(Poverty_Universe))",
+       y=" Number of people in poverty")+
+  theme_light()
+
+
+```
+
+
+```{r }
+
+# Residual plot of the nine largest counties 
+MD_resid = maryland %>% filter(County %in% c("Montgomery County", "Prince George's County"
+                   , "Baltimore County", "Anne Arundel County",
+                   "Baltimore city", "Howard County",
+                   "Frederick County", "Harford County", 
+                   "Carroll County" ) ) %>% 
+  model(model6 = TSLM(log(SAIPE) ~ log(SNAP) + log(Poverty_Universe))) %>% 
+  augment()
+MD_resid %>%  autoplot(.innov)
+
+# LjungBox test on every county of Maryland state
+
+MD_resid2 = maryland %>% 
+  model(model6 = TSLM(log(SAIPE) ~ log(SNAP) + log(Poverty_Universe))) %>% 
+  augment()
+
+MD_resid2 %>% select(County ,.model,.innov) %>% group_by(County) %>% 
+  features(.innov, ljung_box) %>% filter(lb_pvalue <= 0.05)
+
+
+
+```
+
+The only counties that do have white noise  are Prince George's county, Talbot County, Dorchester County and Cecil county while the rest does not exhibits autocorrelation. Overall the model does better at capturing the trend but fails to capture cyclicalities. Furthermore, I expect to employ more sophisticated models that can capture the cyclicalities and fluctuations of SAIPE. 
+
+# Part 3  -  Stochastic Models
+
+
+## Single County Forecasts
+
+```{r} 
+
+
+stochastic_model = maryland %>% filter(County %in% "Montgomery County") %>% 
+  model(
+                  NAIVE_model = NAIVE(log(SAIPE)),
+                  
+                  Mean_model = MEAN(log(SAIPE)),
+                   
+                  SES_model = ETS( log(SAIPE) ~ error("A")+trend("N")+
+                                      season("N")),
+                  
+                  Holt_model = ETS(log(SAIPE) ~ error("A")+trend("A")+
+                                     season("N")),
+                  
+                  Holt_model_damped = ETS(log(SAIPE) ~ error("A")+trend("Ad")+
+                                             season("N")),
+                  
+                  Auto_Arima = ARIMA(log(SAIPE))) 
+
+stochastic_model
+
+
+```
+
+### Plotting the number in poverty data along with a five-year forecast
+
+```{r}
+
+stochastic_model %>% forecast(h="5 years") %>% autoplot(maryland)+ 
+  facet_wrap(~.model, scales = "free_y")+
+  theme_light()+
+  labs(title = " Montgomery County - Forecast of Number of inhabitants in poverty", 
+       y = "Number of people in poverty")
+
+
+```
+
+
+The best model for this county is the Auto Arima( evauated at difference) with a low root mean square error and mean average percentage error.  
+
+
+```{r warning=FALSE}
+
+# The auto arima is the model that exhibits the smallest RMSE accross Maryland counties. 
+stochastic_model %>% accuracy() %>% 
+  group_by( stochatic_models = .model, Maryland_County = County) %>%
+  summarise(RMSE = sum(RMSE), MAPE = sum(MAPE)) %>% 
+  arrange(min(RMSE))
+
+ 
+
+```
+
+
+### Exponential Smoothing Models
+
+```{r }
+
+ES_maryland = maryland  %>% model(
+                    
+                  SES = ETS(log(SAIPE)~error("A") + trend("N") +season("N")),
+                    
+                  holt_trend = ETS(log(SAIPE)~error("A")+trend("A")+season("N")),
+                  
+                  holt_damp = ETS(log(SAIPE)~error("A")+trend("Ad")+season("N")))
+
+# Fitting the ETS models into every country of the state of Maryland
+# I proceeded to graph the top 9 largest counties by population as graphing
+#  24 counties would not properly fit.
+ES_maryland %>% 
+  filter(County %in% c("Montgomery County", "Prince George's County"
+                   , "Baltimore County", "Anne Arundel County",
+                   "Baltimore city", "Howard County",
+                   "Frederick County", "Harford County", 
+                   "Carroll County")) %>% 
+  augment() %>% ggplot(aes(x=year))+
+  geom_line(aes(y=SAIPE)) +
+  geom_line(aes(y=.fitted, color=.model)) +
+  facet_wrap(~County, scales = "free_y") +
+  labs(title = " ETS Models - All Maryland Counties", 
+       y = " Number of people in poverty")+
+  theme_light()
+
+
+```
+### Best Performing ETS Model
+
+I selected the Holt_damped model because per the results below , it shows the smallest RSME and MAPE values against the other models. One particularity of the holt damped model is its addtive trend feature which implies that long run forecast as h approaches infinity, the damping parameter will be constant , while in the short- forecast will be  trended. 
+
+```{r }
+
+
+ES_maryland %>% accuracy() %>% 
+  group_by(Exponential_smoothing_model = .model) %>% 
+  summarise(RMSE = sum(RMSE), 
+            MAPE = sum(MAPE)) %>% 
+  arrange(min(RMSE))
+
+
+```
+
+
+# ARIMA Models
+
+The most commonly selected model is the ARIMA(0,1,0) evaluated at difference, the ARIMA(1,0,0) with a mean constant, and ARIMA(0,1,1) with a drift.
+
+
+```{r }
+# The most selected ARIMA model is the model evaluated at difference
+maryland %>% model(ARIMA(log(SAIPE))) %>% print()
+
+```
+
+
+### Best Performing  Arima model
+
+The best ARIMA model is the model with the drift with the smallest RMSE and MAPE. Moreover, the model forecast follows a straight line. That is , the forecast indicates the number of people in poverty is increasing as the trend is sloping upward, so the constant is non-zero and d is 1.As suggested by the RMSE, the best model is the ARIMA with drift
+
+```{r }
+
+maryland %>% model(Difference = ARIMA(log(SAIPE) ~ pdq(0,1,0)), 
+                   ARIMA_Drift = ARIMA(log(SAIPE) ~ 1 + pdq(0,1,1)),
+                   ARIMA_mean = ARIMA(log(SAIPE) ~ 1 + pdq(1,0,0))) %>% 
+  accuracy() %>% 
+  
+  group_by(Arima_models = .model) %>% 
+  
+  summarise(RMSE = sum(RMSE), 
+            MAPE = sum(MAPE)) %>% 
+  
+  arrange(min(RMSE))
+
+
+
+
+```
+
+
+```{r }
+
+# Fitting the ARIMA models to every county 
+
+maryland %>% filter(County %in% c("Montgomery County", "Prince George's County"
+                   , "Baltimore County", "Anne Arundel County",
+                   "Baltimore city", "Howard County",
+                   "Frederick County", "Harford County", 
+                   "Carroll County")) %>% 
+  model(Difference_0_1_0 = ARIMA(log(SAIPE) ~ pdq(0,1,0)), 
+                   
+                   ARIMA_Drift_0_1_1 = ARIMA(log(SAIPE) ~ 1 + pdq(0,1,1)),
+                   
+                   ARIMA_mean_1_0_0 = ARIMA(log(SAIPE) ~ 1 + pdq(1,0,0))) %>% 
+  
+  augment() %>% ggplot(aes(x=year))+
+  
+  geom_line(aes(y=SAIPE)) +
+  
+  geom_line(aes(y=.fitted, color=.model)) +
+  
+  facet_wrap(~County, scales = "free_y") +
+  
+  labs(title = " ARIMA Models - All Maryland Counties", 
+       y = " Number of people in poverty")+
+  
+  theme_light()
+  
+
+
+
+```
+
+# Cross validation
+
+The best model is the ARIMA model evaluated at difference or ARIMA(0,1,0) depicting a random walk in which the changes in the level of poverty that oscillate up and down with an unpredictable patterns. The results also demonstrate that SAIPE is non-stationary and that differencing is the suitable approach for SAIPE to be stationary.
+
+## ETS
+
+```{r}
+
+
+# Building Training Sets
+
+ES_maryland_stretch = maryland %>% stretch_tsibble(.init = 20)
+
+ES_maryland_training = ES_maryland_stretch  %>% model(
+                    
+                  SES = ETS(log(SAIPE)~error("A") + trend("N") +season("N")),
+                    
+                  holt_trend = ETS(log(SAIPE)~error("A")+trend("A")+season("N")),
+                  
+                  holt_damp = ETS(log(SAIPE)~error("A")+trend("Ad")+season("N")))
+```
+
+
+```{r}
+# Accuracy Check
+ES_maryland_training %>% accuracy() %>% 
+  group_by(ETS_Models = .model) %>% 
+  summarise( RMSE = sum(RMSE)) %>% 
+  arrange(RMSE)
+
+```
+
+
+```{r warning=FALSE}
+
+# Cross validation between training and test data
+ES_maryland_training %>% 
+forecast(h="5 years") %>% 
+  accuracy(maryland) %>% 
+  group_by(ETS_Models = .model) %>% 
+  summarise(RMSE = sum(RMSE)) %>% 
+  arrange(RMSE)
+
+```
+
+## ARIMA
+
+```{r warning=FALSE}
+
+ARIMA_maryland_strech = maryland %>% stretch_tsibble(.init = 20)
+
+ARIMA_maryland_training = ARIMA_maryland_strech %>% model(Difference = ARIMA(log(SAIPE) ~ pdq(0,1,0)), 
+                   ARIMA_Drift = ARIMA(log(SAIPE) ~ 1 + pdq(0,1,1)),
+                   ARIMA_mean = ARIMA(log(SAIPE) ~ 1 + pdq(1,0,0)))
+
+
+```
+
+```{r}
+# Accuracy Check
+
+ARIMA_maryland_training %>% accuracy() %>% 
+  group_by(ARIMA_Models = .model) %>% 
+  summarise(RMSE = sum(RMSE)) %>% 
+  arrange(RMSE)
+
+
+
+```
+
+
+
+```{r warning=FALSE}
+
+# Cross validation between training and test data
+ARIMA_maryland_training %>% 
+forecast(h="5 years") %>% 
+  accuracy(maryland) %>% 
+  group_by(ARIMA_Models = .model) %>% 
+  summarise(RMSE = sum(RMSE)) %>% 
+  arrange(RMSE)
+
+```
+
+# Forecasts
+
+
+The 5 counties with the largest increase in poverty level in the next 5 years are Somerset, Baltimore city, Allegany, Dorechester, and Washington counties. 
+
+```{r }
+
+# Forecasting poverty
+poverty_forecast = maryland %>% rename(county = County) %>% 
+  model(Arima_Diff = ARIMA(log(SAIPE) ~ pdq(0,1,0))) %>% 
+  forecast(h="5 years")
+
+# Extracting current population which is in 2021 for every county
+current_population = maryland %>%  filter(year == 2021) %>% 
+  select(county =County, Poverty_Universe)
+
+
+# Join current populatin in 2021 with forecast data
+merge(current_population,poverty_forecast, by ="county" ) %>% 
+  mutate(Poverty_Percent_change = .mean/Poverty_Universe * 100) %>% 
+  group_by(county) %>% summarise(Poverty_level_Prct = max(Poverty_Percent_change)) %>% 
+  arrange(desc(Poverty_level_Prct))
+
+
+```
+
+
+```{r }
+
+# Mapping the forecast of poverty increases for the next 5 years
+
+# Merging countypop with forecasted poverty level. Then, I substited county population with mean forecast which I will map next
+#-----------------------
+
+poverty_Prctchng_forecast = merge(current_population,poverty_forecast, by ="county" ) %>% 
+  mutate(Poverty_Percent_change = .mean/Poverty_Universe * 100) %>% 
+  select(county,year = year.y, Poverty_Percent_change)
+countypop = countypop
+
+MD_countypop = merge(countypop,poverty_Prctchng_forecast, by="county") %>%
+  filter(abbr == "MD", year ==2026) %>% 
+  select(c(fips,county,abbr,Poverty_Percent_change))
+
+
+#------------------------ Map
+
+plot_usmap(data = MD_countypop, values = "Poverty_Percent_change", include = "MD",
+           labels = TRUE )+
+  scale_fill_continuous(
+    low = "white", high = "blue", name = " Poverty Percentage",
+    label = scales::comma
+  ) +
+  labs(title = " Maryland  Counties Poverty  Level - 2026 Forecast ")
+
+
+
+
+```
+
+The map reinforces the findings above and also provides a clear view of the projected poverty increase in 2026 in Somerset, Baltimore City, Allegany, Dorechester, and Washington counties.
